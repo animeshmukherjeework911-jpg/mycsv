@@ -4,7 +4,7 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "/home/animesh/.asdf/installs/python/3.12.1/include/python3.12"
+                "/home/ani/.asdf/installs/python/3.12.1/include/python3.12"
             ],
             "defines": [],
             "compilerPath": "/bin/gcc",

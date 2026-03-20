@@ -24,8 +24,9 @@ MANIFEST
 .pytest_cache/
 .coverage
 
-# VSCode (keep tasks/launch/c_cpp_properties, ignore personal settings)
+# VSCode (ignore personal/machine-specific settings)
 .vscode/settings.json
+.vscode/c_cpp_properties.json
 
 # asdf
-.tool-versions
+# .tool-versions
