@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build C extension (editable install)",
+      "type": "shell",
+      "command": "pip install -e . --no-build-isolation",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": {
+        "owner": "gcc",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.+):(\\d+):(\\d+):\\s+(warning|error):\\s+(.+)$",
+          "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+        }
+      }
+    },
+    {
+      "label": "Run tests",
+      "type": "shell",
+      "command": "python -m pytest tests/ -v",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "dependsOn": "Build C extension (editable install)"
+    },
+    {
+      "label": "Run tests (no rebuild)",
+      "type": "shell",
+      "command": "python -m pytest tests/ -v",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Clean build artifacts",
+      "type": "shell",
+      "command": "rm -rf build/ dist/ *.egg-info src/*.egg-info **/__pycache__ src/*.so",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ]
+}

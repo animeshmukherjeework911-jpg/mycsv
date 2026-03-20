@@ -1,0 +1,27 @@
+[build-system]
+# These packages must be installed before your package can be built.
+# pip installs them into the isolated build env (or your venv with --no-build-isolation).
+requires = ["setuptools", "wheel"]
+
+# The dotted import path to the Python object pip calls to actually build the package.
+# pip does: from setuptools.build_meta import build_wheel (and build_sdist, get_requires, etc.)
+# This is what lets pip understand setup.py, find C extensions, compile them, and produce a .whl.
+# Alternative backends exist: "flit_core.buildapi", "hatchling.build", "maturin" (for Rust), etc.
+# Each backend speaks the same PEP 517 protocol so pip doesn't care which one you use.
+build-backend = "setuptools.build_meta"
+
+[project]
+# The name pip/PyPI uses — what you'd type in `pip install mycsv`.
+name = "mycsv"
+version = "0.1.0"
+description = "A hand-rolled CSV module with a C extension"
+# pip refuses to install this package on Python versions below 3.10.
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+# Tell setuptools to look for Python packages (directories with __init__.py) under src/.
+# Without this, setuptools would scan the project root and might miss src/mycsv.py.
+where = ["src"]
+
+# The C extension is declared in setup.py (setuptools reads it at build time).
+# pyproject.toml alone cannot express Extension() objects yet.
