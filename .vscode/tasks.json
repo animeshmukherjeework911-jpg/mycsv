@@ -35,6 +35,15 @@
       "presentation": { "reveal": "always", "panel": "shared" }
     },
     {
+      "label": "Build + Open REPL",
+      "type": "shell",
+      "command": "pip install -e . --no-build-isolation && python -i -c \"import _mycsv; import mycsv; print('mycsv ready')\"",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "new", "focus": true },
+      "problemMatcher": []
+    },
+    {
       "label": "Clean build artifacts",
       "type": "shell",
       "command": "rm -rf build/ dist/ *.egg-info src/*.egg-info **/__pycache__ src/*.so",

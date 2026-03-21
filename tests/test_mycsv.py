@@ -1,8 +1,9 @@
+
 """
 test_mycsv.py — full test suite for the mycsv module.
 
 Tests are ordered to match the 10-step build plan so you can run them
-incrementally with:  pytest -k "step1"  etc.
+incrementally with:  pytest -k "Step1"  etc.
 
 Run all:  pytest tests/
 """
@@ -19,6 +20,22 @@ except ImportError as exc:
         f"mycsv not importable ({exc}). Build with: pip install -e .",
         allow_module_level=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def simple_csv_file():
+    return io.StringIO("name,age,city\nAlice,30,NYC\nBob,25,LA\n")
+
+@pytest.fixture
+def csv_with_quotes():
+    return 'id,value\n1,"hello, world"\n'
+
+@pytest.fixture
+def csv_with_multiline_field():
+    return 'id,value\n1,"hello, world"\n2,"line1\nline2"\n'
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +95,6 @@ class TestStep4_QuotedFields:
         rows = list(mycsv.reader(io.StringIO(csv_with_quotes)))
         assert rows[1] == ["1", "hello, world"]
 
-    def test_newline_inside_quotes(self, csv_with_quotes):
-        rows = list(mycsv.reader(io.StringIO(csv_with_quotes)))
-        assert rows[2] == ["2", "line1\nline2"]
-
     def test_doubled_quote_escape(self):
         f = io.StringIO('a\n"say ""hi"""\n')
         rows = list(mycsv.reader(f))
@@ -89,9 +102,9 @@ class TestStep4_QuotedFields:
 
 
 # ---------------------------------------------------------------------------
-# Step 5 — writer: basic write
+# Step 6 — writer: basic write
 # ---------------------------------------------------------------------------
-class TestStep5_WriterBasic:
+class TestStep6_WriterBasic:
     def test_write_simple_row(self):
         out = io.StringIO()
         w = mycsv.writer(out)
@@ -129,9 +142,18 @@ class TestStep6_WriterQuoting:
 
 
 # ---------------------------------------------------------------------------
-# Step 7 — DictReader
+# Step 7 — reader: multi-line fields
 # ---------------------------------------------------------------------------
-class TestStep7_DictReader:
+class TestStep7_MultilineFields:
+    def test_newline_inside_quotes(self, csv_with_multiline_field):
+        rows = list(mycsv.reader(io.StringIO(csv_with_multiline_field)))
+        assert rows[2] == ["2", "line1\nline2"]
+
+
+# ---------------------------------------------------------------------------
+# Step 8 — DictReader
+# ---------------------------------------------------------------------------
+class TestStep8_DictReader:
     def test_returns_dicts(self, simple_csv_file):
         r = mycsv.DictReader(simple_csv_file)
         row = next(r)

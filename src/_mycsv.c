@@ -80,29 +80,38 @@
  *   frees the object. Every PyObject * you "own" must eventually be
  *   decremented; forgetting it causes a memory leak.
  *----------------------------------------------------------------------*/
-static PyObject *mycsv_parse_line(PyObject *self, PyObject *args){
+static PyObject *mycsv_parse_line_no_quote(PyObject *self, PyObject *args, PyObject *kwargs)
+{
 
     const char *line;
+    const char *delim = ",";
 
-    const char *delim;
+    static char *kwlist[] = {"line", "delimiter", NULL};
 
-    if (!PyArg_ParseTuple(args, "ss", &line, &delim)) 
+    // if (!PyArg_ParseTuple(args, "ss", &line, &delim))
+    //     return NULL;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|s", kwlist, &line, &delim))
         return NULL;
 
-    char sep = delim[0];
+    char delimiter = delim[0];
 
     PyObject *result = PyList_New(0);
-    if (!result) {
+    if (!result)
+    {
         return NULL;
     }
 
     const char *start = line;
     const char *p = line;
 
-    while (1) {
-        if (*p == sep || *p == '\0') {
-            PyObject *field = PyUnicode_FromStringAndSize(start, p-start);
-            if (!field) {
+    while (1)
+    {
+        if (*p == delimiter || *p == '\0')
+        {
+            PyObject *field = PyUnicode_FromStringAndSize(start, p - start);
+            if (!field)
+            {
                 Py_DECREF(result);
                 return NULL;
             }
@@ -110,7 +119,7 @@ static PyObject *mycsv_parse_line(PyObject *self, PyObject *args){
             PyList_Append(result, field);
             Py_DECREF(field);
 
-            if (*p == '\0') 
+            if (*p == '\0')
                 break;
 
             start = p + 1;
@@ -120,12 +129,293 @@ static PyObject *mycsv_parse_line(PyObject *self, PyObject *args){
     return result;
 };
 
+static PyObject *mycsv_parse_line(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+
+    const char *line;
+    const char *delim = ",";
+    const char *quotestr = "\"";
+
+    static char *kwlist[] = {"line", "delimiter", "quotechar", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|ss", kwlist, &line, &delim, &quotestr))
+        return NULL;
+
+    char sep = delim[0];
+    char quote = quotestr[0];
+
+    PyObject *result = PyList_New(0);
+    if (!result)
+    {
+        return NULL;
+    }
+
+    Py_ssize_t buf_size = 128;
+    char *buf = (char *)PyMem_Malloc(buf_size);
+    if (!buf)
+    {
+        Py_DECREF(result);
+        return PyErr_NoMemory();
+    }
+    Py_ssize_t buf_len = 0;
+
+#define BUF_APPEND(c)                                         \
+    do                                                        \
+    {                                                         \
+        if (buf_len >= buf_size - 1)                          \
+        {                                                     \
+            buf_size *= 2;                                    \
+            char *tmp = (char *)PyMem_Realloc(buf, buf_size); \
+            if (!tmp)                                         \
+            {                                                 \
+                PyMem_Free(buf);                              \
+                Py_DECREF(result);                            \
+                return PyErr_NoMemory();                      \
+            }                                                 \
+            buf = tmp;                                        \
+        }                                                     \
+        buf[buf_len++] = (c);                                 \
+    } while (0)
+
+    typedef enum
+    {
+        FIELD_START,
+        IN_FIELD,
+        IN_QUOTED
+    } State;
+    State state = FIELD_START;
+    const char *p = line;
+
+    while (1)
+    {
+        char c = *p;
+        if (state == FIELD_START)
+        {
+            if (c == quote)
+            {
+                state = IN_QUOTED;
+            }
+            else if (c == sep || c == '\0')
+            {
+                PyObject *field = PyUnicode_FromStringAndSize(buf, 0);
+                if (!field)
+                    goto error;
+                PyList_Append(result, field);
+                Py_DECREF(field);
+                if (c == '\0')
+                    goto done;
+                state = FIELD_START;
+            }
+            else
+            {
+                BUF_APPEND(c);
+                state = IN_FIELD;
+            }
+        }
+        else if (state == IN_FIELD)
+        {
+            if (c == sep || c == '\0')
+            {
+                PyObject *field = PyUnicode_FromStringAndSize(buf, buf_len);
+                if (!field)
+                    goto error;
+                PyList_Append(result, field);
+                Py_DECREF(field);
+                buf_len = 0;
+                if (c == '\0')
+                    goto done;
+                state = FIELD_START;
+            }
+            else
+            {
+                BUF_APPEND(c);
+            }
+        }
+        else
+        {
+            if (c == '\0')
+            {
+                PyErr_SetString(PyExc_ValueError, "mycsv: unclosed quote");
+                goto error;
+            }
+            else if (c == quote)
+            {
+                if (*(p + 1) == quote)
+                {
+                    BUF_APPEND(c);
+                    p++;
+                }
+                else if (*(p + 1) == sep || *(p + 1) == '\0')
+                {
+                    PyObject *field = PyUnicode_FromStringAndSize(buf, buf_len);
+                    if (!field)
+                        goto error;
+                    PyList_Append(result, field);
+                    Py_DECREF(field);
+                    buf_len = 0;
+                    p++;
+                    if (*p == '\0')
+                        goto done;
+                    state = FIELD_START;
+                }
+                else
+                {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "mycsv: unexpected char after closing quote");
+                    goto error;
+                }
+            }
+            else
+            {
+                BUF_APPEND(c);
+            }
+        }
+        p++;
+    }
+
+done:
+    PyMem_Free(buf);
+    return result;
+
+error:
+    PyMem_Free(buf);
+    Py_DECREF(result);
+    return NULL;
+}
+#undef BUF_APPEND
+
+static PyObject *mycsv_format_row(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+
+    PyObject *fields_obj;
+    const char *delim = ",";
+    const char *quotestr = "\"";
+    const char *lineterm = "\r\n";
+
+    static char *kwlist[] = {"fields", "delimiter", "quotechar", "lineterminator", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|sss", kwlist, &fields_obj, &delim, &quotestr, &lineterm))
+        return NULL;
+
+    char sep = delim[0];
+    char quote = quotestr[0];
+
+    PyObject *seq = PySequence_Fast(fields_obj, "format_row: fields must be iterable");
+
+    if (!seq)
+        return NULL;
+
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+
+    Py_ssize_t buf_size = 256;
+    char *buf = (char *)PyMem_Malloc(buf_size);
+    if (!buf)
+    {
+        Py_DECREF(seq);
+        return PyErr_NoMemory();
+    }
+    Py_ssize_t buf_len = 0;
+
+#define BUF_APPEND(c)                                         \
+    do                                                        \
+    {                                                         \
+        if (buf_len >= buf_size - 1)                          \
+        {                                                     \
+            buf_size *= 2;                                    \
+            char *tmp = (char *)PyMem_Realloc(buf, buf_size); \
+            if (!tmp)                                         \
+            {                                                 \
+                PyMem_Free(buf);                              \
+                Py_DECREF(seq);                               \
+                return PyErr_NoMemory();                      \
+            }                                                 \
+            buf = tmp;                                        \
+        }                                                     \
+        buf[buf_len++] = (c);                                 \
+    } while (0)
+
+#define BUF_APPEND_STR(s)                     \
+    do                                        \
+    {                                         \
+        for (const char *_p = (s); *_p; _p++) \
+            BUF_APPEND(*_p);                  \
+    } while (0)
+
+    for (Py_ssize_t i = 0; i < n; i++)
+    {
+        if (i > 0)
+            BUF_APPEND(sep);
+        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
+        Py_ssize_t field_len;
+        const char *field = PyUnicode_AsUTF8AndSize(item, &field_len);
+        if (!field)
+        {
+            PyMem_Free(buf);
+            Py_DECREF(seq);
+            return NULL;
+        }
+
+        int needs_quote = 0;
+        for (Py_ssize_t j = 0; j < field_len; j++)
+        {
+            if (field[j] == sep || field[j] == quote || field[j] == '\r' || field[j] == '\n')
+            {
+                needs_quote = 1;
+                break;
+            }
+        }
+
+        if (needs_quote)
+        {
+            BUF_APPEND(quote);
+            for (Py_ssize_t j = 0; j < field_len; j++)
+            {
+                if (field[j] == quote)
+                {
+                    BUF_APPEND(quote);
+                }
+                BUF_APPEND(field[j]);
+            }
+            BUF_APPEND(quote);
+        }
+        else
+        {
+            for (Py_ssize_t j = 0; j < field_len; j++)
+            {
+                BUF_APPEND(field[j]);
+            }
+        }
+    }
+
+    BUF_APPEND_STR(lineterm);
+
+    PyObject *result = PyUnicode_FromStringAndSize(buf, buf_len);
+    PyMem_Free(buf);
+    Py_DECREF(seq);
+    return result;
+}
+#undef BUF_APPEND
+#undef BUF_APPEND_STR
+
+
 static PyMethodDef _mycsv_methods[] = {
-    {"parse_line",
-     mycsv_parse_line,
-     METH_VARARGS,
-     "parse_line(line, delimiter) -> list[str]\n"
+    {
+        "format_row",
+        (PyCFunction)mycsv_format_row,
+        METH_VARARGS | METH_KEYWORDS,
+        "format_row(fields, delimiter=',', quotechar='\"', lineterminator='\\r\\n') -> str\n"
+        "Format a sequence of fields into a csv row string."
+    },
+    {"parse_line_no_quote",
+     (PyCFunction)mycsv_parse_line_no_quote,
+     METH_VARARGS | METH_KEYWORDS,
+     "parse_line_no_quote(line, delimiter=',') -> list[str]\n"
      "Split a CSV line on a delimiter. No quote handling yet."},
+    {"parse_line",
+     (PyCFunction)mycsv_parse_line,
+     METH_VARARGS | METH_KEYWORDS,
+     "parse_line(line, delimiter=',', quotechar='\"') -> list[str]\n"
+     "Split a CSV line with full quote and escape handling."},
     {NULL, NULL, 0, NULL}};
 
 /* ------------------------------------------------------------------ */
@@ -136,7 +426,7 @@ static PyModuleDef _mycsv_module = {
     "_mycsv",          /* module name */
     "mycsv C backend", /* docstring   */
     -1,                /* per-interpreter state size; -1 = none */
-    _mycsv_methods               /* method table — you'll add this */
+    _mycsv_methods     /* method table — you'll add this */
 };
 
 PyMODINIT_FUNC
