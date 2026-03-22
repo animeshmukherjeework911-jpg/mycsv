@@ -67,6 +67,23 @@ if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|sssi", kwlist,
     return NULL;
 ```
 
+### The `needs_quote` two-phase pattern
+
+`needs_quote` is a boolean flag that separates **deciding** whether to quote
+from **writing** the field. The alternative — checking mid-write — would
+tangle the decision logic with the character loop and make both harder to read.
+
+The decision logic reflects a core CSV rule: a field only needs quoting when
+it contains a character that would make the output ambiguous without it:
+
+| Character | Why it forces quoting |
+|---|---|
+| delimiter (`,`) | Would split the field into two fields on read |
+| quotechar (`"`) | An embedded quote must be doubled; field must be wrapped |
+| `\r` or `\n` | Would terminate the row mid-field on read |
+
+If none of these appear, the field can be written raw — no wrapping needed.
+
 Replace the `needs_quote` decision block:
 
 ```c

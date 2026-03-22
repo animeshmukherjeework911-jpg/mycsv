@@ -80,6 +80,9 @@
  *   frees the object. Every PyObject * you "own" must eventually be
  *   decremented; forgetting it causes a memory leak.
  *----------------------------------------------------------------------*/
+
+ static PyObject *mycsv_Error = NULL;
+
 static PyObject *mycsv_parse_line_no_quote(PyObject *self, PyObject *args, PyObject *kwargs)
 {
 
@@ -93,6 +96,11 @@ static PyObject *mycsv_parse_line_no_quote(PyObject *self, PyObject *args, PyObj
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|s", kwlist, &line, &delim))
         return NULL;
+
+    if (strlen(delim) != 1) {
+        PyErr_SetString(mycsv_Error, "delimiter must be a 1-character string");
+        return NULL;
+    }
 
     char delimiter = delim[0];
 
@@ -127,7 +135,7 @@ static PyObject *mycsv_parse_line_no_quote(PyObject *self, PyObject *args, PyObj
         p++;
     }
     return result;
-};
+}
 
 static PyObject *mycsv_parse_line(PyObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -140,6 +148,15 @@ static PyObject *mycsv_parse_line(PyObject *self, PyObject *args, PyObject *kwar
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|ss", kwlist, &line, &delim, &quotestr))
         return NULL;
+
+    if (strlen(delim) != 1) {
+        PyErr_SetString(mycsv_Error, "delimiter must be a 1-character string");
+        return NULL;
+    }
+    if (strlen(quotestr) != 1) {
+        PyErr_SetString(mycsv_Error, "quotechar must be a 1-character string");
+        return NULL;
+    }
 
     char sep = delim[0];
     char quote = quotestr[0];
@@ -235,7 +252,7 @@ static PyObject *mycsv_parse_line(PyObject *self, PyObject *args, PyObject *kwar
         {
             if (c == '\0')
             {
-                PyErr_SetString(PyExc_ValueError, "mycsv: unclosed quote");
+                PyErr_SetString(mycsv_Error, "mycsv: unclosed quote");
                 goto error;
             }
             else if (c == quote)
@@ -260,7 +277,7 @@ static PyObject *mycsv_parse_line(PyObject *self, PyObject *args, PyObject *kwar
                 }
                 else
                 {
-                    PyErr_SetString(PyExc_ValueError,
+                    PyErr_SetString(mycsv_Error,
                                     "mycsv: unexpected char after closing quote");
                     goto error;
                 }
@@ -291,11 +308,25 @@ static PyObject *mycsv_format_row(PyObject *self, PyObject *args, PyObject *kwar
     const char *delim = ",";
     const char *quotestr = "\"";
     const char *lineterm = "\r\n";
+    int quoting = 0;
 
-    static char *kwlist[] = {"fields", "delimiter", "quotechar", "lineterminator", NULL};
+    static char *kwlist[] = {"fields", "delimiter", "quotechar", "lineterminator", "quoting", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|sss", kwlist, &fields_obj, &delim, &quotestr, &lineterm))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|sssi", kwlist, &fields_obj, &delim, &quotestr, &lineterm, &quoting))
         return NULL;
+
+    if (strlen(delim) != 1) {
+        PyErr_SetString(mycsv_Error, "delimiter must be a 1-character string");
+        return NULL;
+    }
+    if (strlen(quotestr) != 1) {
+        PyErr_SetString(mycsv_Error, "quotechar must be a 1-character string");
+        return NULL;
+    }
+    if (quoting < 0 || quoting > 3) {
+        PyErr_SetString(mycsv_Error, "quoting must be one of QUOTE_MINIMAL(0), QUOTE_ALL(1), QUOTE_NONNUMERIC(2), QUOTE_NONE(3)");
+        return NULL;
+    }
 
     char sep = delim[0];
     char quote = quotestr[0];
@@ -355,13 +386,63 @@ static PyObject *mycsv_format_row(PyObject *self, PyObject *args, PyObject *kwar
             return NULL;
         }
 
+        /*
+         * PHASE 1 — DECIDE: does this field need to be wrapped in quote chars?
+         *
+         * needs_quote is a boolean flag. We answer the question ONCE here,
+         * before writing anything, so the write logic below stays clean.
+         *
+         * Why quoting is necessary at all:
+         *   A field like  New York, NY  contains a comma. If written raw,
+         *   the reader sees TWO fields: "New York" and " NY". Wrapping it
+         *   in quotes — "New York, NY" — makes the comma unambiguous: it is
+         *   data, not a delimiter. Same problem with embedded newlines and
+         *   quote characters.
+         *
+         * The three cases driven by the quoting mode:
+         *
+         *   QUOTE_ALL (1):
+         *     Caller says "quote everything, no exceptions."
+         *     needs_quote = 1 unconditionally.
+         *     Use case: maximum compatibility — some readers require all fields quoted.
+         *
+         *   QUOTE_NONE (3):
+         *     Caller says "never quote, I'll handle ambiguity myself."
+         *     needs_quote = 0 unconditionally.
+         *     Dangerous: a field with a comma will produce broken output.
+         *     Use case: fixed-width data, callers that pre-sanitise fields.
+         *
+         *   QUOTE_MINIMAL (0) and QUOTE_NONNUMERIC (2) — the default path:
+         *     Scan the field byte-by-byte. Quote only if we find a character
+         *     that would make the CSV ambiguous without quoting:
+         *       sep   — delimiter would split the field into two
+         *       quote — an embedded quote must be doubled; the field must be quoted
+         *       \r \n — a newline would terminate the row mid-field
+         *     Break early on first match — no need to scan the rest.
+         *
+         * PHASE 2 — WRITE (below):
+         *   If needs_quote == 1: wrap in quote chars, doubling any inner quotes.
+         *   If needs_quote == 0: write raw bytes directly into the output buffer.
+         */
         int needs_quote = 0;
-        for (Py_ssize_t j = 0; j < field_len; j++)
+
+        if (quoting == 1)
         {
-            if (field[j] == sep || field[j] == quote || field[j] == '\r' || field[j] == '\n')
+            needs_quote = 1;
+        }
+        else if (quoting == 3)
+        {
+            needs_quote = 0;
+        }
+        else
+        {
+            for (Py_ssize_t j = 0; j < field_len; j++)
             {
-                needs_quote = 1;
-                break;
+                if (field[j] == sep || field[j] == quote || field[j] == '\r' || field[j] == '\n')
+                {
+                    needs_quote = 1;
+                    break;
+                }
             }
         }
 
@@ -397,15 +478,12 @@ static PyObject *mycsv_format_row(PyObject *self, PyObject *args, PyObject *kwar
 #undef BUF_APPEND
 #undef BUF_APPEND_STR
 
-
 static PyMethodDef _mycsv_methods[] = {
-    {
-        "format_row",
-        (PyCFunction)mycsv_format_row,
-        METH_VARARGS | METH_KEYWORDS,
-        "format_row(fields, delimiter=',', quotechar='\"', lineterminator='\\r\\n') -> str\n"
-        "Format a sequence of fields into a csv row string."
-    },
+    {"format_row",
+     (PyCFunction)mycsv_format_row,
+     METH_VARARGS | METH_KEYWORDS,
+     "format_row(fields, delimiter=',', quotechar='\"', lineterminator='\\r\\n') -> str\n"
+     "Format a sequence of fields into a csv row string."},
     {"parse_line_no_quote",
      (PyCFunction)mycsv_parse_line_no_quote,
      METH_VARARGS | METH_KEYWORDS,
@@ -432,5 +510,27 @@ static PyModuleDef _mycsv_module = {
 PyMODINIT_FUNC
 PyInit__mycsv(void)
 {
-    return PyModule_Create(&_mycsv_module);
+    PyObject *m = PyModule_Create(&_mycsv_module);
+    if (!m)
+        return NULL;
+
+    /* Define the Error class directly in the C extension.
+     * "_mycsv.Error" is the fully qualified name Python sees.
+     * mycsv.py imports it as: from _mycsv import Error
+     * This avoids the circular import that occurs when _mycsv tries to
+     * import mycsv (which itself imports _mycsv) to retrieve mycsv.Error. */
+    mycsv_Error = PyErr_NewException("_mycsv.Error", NULL, NULL);
+    if (!mycsv_Error) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    Py_INCREF(mycsv_Error);
+    PyModule_AddObject(m, "Error", mycsv_Error);
+
+    PyModule_AddIntConstant(m, "QUOTE_MINIMAL", 0);
+    PyModule_AddIntConstant(m, "QUOTE_ALL", 1);
+    PyModule_AddIntConstant(m, "QUOTE_NONNUMERIC", 2);
+    PyModule_AddIntConstant(m, "QUOTE_NONE", 3);
+
+    return m;
 }

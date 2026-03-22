@@ -37,6 +37,15 @@ def csv_with_quotes():
 def csv_with_multiline_field():
     return 'id,value\n1,"hello, world"\n2,"line1\nline2"\n'
 
+@pytest.fixture(autouse=False)
+def clean_dialects():
+    """Capture dialect registry state before a test and restore it after."""
+    before = set(mycsv.list_dialects())
+    yield
+    for name in mycsv.list_dialects():
+        if name not in before:
+            mycsv.unregister_dialect(name)
+
 
 # ---------------------------------------------------------------------------
 # Step 1 — Module exists and exposes expected public names
@@ -188,19 +197,31 @@ class TestStep8_DictWriter:
 # Step 9 — Dialect support
 # ---------------------------------------------------------------------------
 class TestStep9_Dialect:
-    def test_register_and_use_dialect(self):
+    def test_register_and_use_dialect(self, clean_dialects):
         mycsv.register_dialect("pipes", delimiter="|", lineterminator="\n")
         out = io.StringIO()
         w = mycsv.writer(out, dialect="pipes")
         w.writerow(["a", "b"])
         assert out.getvalue() == "a|b\n"
 
-    def test_list_dialects(self):
+    def test_list_dialects(self, clean_dialects):
         mycsv.register_dialect("pipes", delimiter="|", lineterminator="\n")
         assert "pipes" in mycsv.list_dialects()
 
     def test_excel_dialect_exists(self):
         assert "excel" in mycsv.list_dialects()
+
+    def test_excel_tab_dialect_exists(self):
+        assert "excel-tab" in mycsv.list_dialects()
+
+    def test_unregister_dialect(self, clean_dialects):
+        mycsv.register_dialect("tmp", delimiter="|")
+        mycsv.unregister_dialect("tmp")
+        assert "tmp" not in mycsv.list_dialects()
+
+    def test_unknown_dialect_raises(self):
+        with pytest.raises(mycsv.Error):
+            mycsv.get_dialect("nonexistent")
 
 
 # ---------------------------------------------------------------------------
@@ -213,5 +234,104 @@ class TestStep10_Errors:
             list(mycsv.reader(f))
 
     def test_invalid_delimiter_raises(self):
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(mycsv.Error):
             mycsv.reader(io.StringIO("a,b"), delimiter=",,")
+
+    def test_invalid_quotechar_raises(self):
+        with pytest.raises(mycsv.Error):
+            mycsv.reader(io.StringIO("a,b"), quotechar='""')
+
+    def test_invalid_writer_delimiter_raises(self):
+        with pytest.raises(mycsv.Error):
+            mycsv.writer(io.StringIO(), delimiter=",,")
+
+    def test_unknown_dialect_raises(self):
+        with pytest.raises(mycsv.Error):
+            mycsv.reader(io.StringIO("a,b"), dialect="nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Round-trip — write then read back, assert identical
+# ---------------------------------------------------------------------------
+class TestRoundTrip:
+    def _roundtrip(self, rows, **kwargs):
+        buf = io.StringIO()
+        mycsv.writer(buf, **kwargs).writerows(rows)
+        buf.seek(0)
+        return list(mycsv.reader(buf, **kwargs))
+
+    def test_simple_rows(self):
+        rows = [["name", "age"], ["Alice", "30"], ["Bob", "25"]]
+        assert self._roundtrip(rows) == rows
+
+    def test_field_with_comma(self):
+        rows = [["New York, NY", "USA"]]
+        assert self._roundtrip(rows) == rows
+
+    def test_field_with_embedded_quote(self):
+        rows = [['say "hi"', "ok"]]
+        assert self._roundtrip(rows) == rows
+
+    def test_empty_fields(self):
+        rows = [["", "b", ""]]
+        assert self._roundtrip(rows) == rows
+
+    def test_none_becomes_empty_string(self):
+        out = io.StringIO()
+        mycsv.writer(out).writerow([1, None, 2.5])
+        assert out.getvalue() == "1,,2.5\r\n"
+
+    def test_tab_delimiter(self):
+        rows = [["a", "b", "c"], ["1", "2", "3"]]
+        assert self._roundtrip(rows, delimiter="\t") == rows
+
+    def test_trailing_delimiter(self):
+        rows = [["a", "b", ""]]
+        assert self._roundtrip(rows) == rows
+
+
+# ---------------------------------------------------------------------------
+# DictReader — restkey / restval edge cases
+# ---------------------------------------------------------------------------
+class TestDictReaderEdgeCases:
+    def test_fewer_values_than_fieldnames(self):
+        f = io.StringIO("a,b,c\n1,2\n")
+        r = mycsv.DictReader(f)
+        row = next(r)
+        assert row == {"a": "1", "b": "2", "c": None}
+
+    def test_more_values_than_fieldnames(self):
+        f = io.StringIO("a,b\n1,2,3,4\n")
+        r = mycsv.DictReader(f, restkey="extras")
+        row = next(r)
+        assert row["extras"] == ["3", "4"]
+
+    def test_empty_file_raises_stopiteration(self):
+        r = mycsv.DictReader(io.StringIO(""))
+        with pytest.raises(StopIteration):
+            next(r)
+
+
+# ---------------------------------------------------------------------------
+# DictWriter — writerows
+# ---------------------------------------------------------------------------
+class TestDictWriterWriterows:
+    def test_writerows(self):
+        out = io.StringIO()
+        w = mycsv.DictWriter(out, fieldnames=["name", "age"])
+        w.writeheader()
+        w.writerows([{"name": "Alice", "age": "30"}, {"name": "Bob", "age": "25"}])
+        lines = out.getvalue().splitlines()
+        assert lines == ["name,age", "Alice,30", "Bob,25"]
+
+    def test_extrasaction_raise(self):
+        out = io.StringIO()
+        w = mycsv.DictWriter(out, fieldnames=["name"], extrasaction="raise")
+        with pytest.raises(ValueError):
+            w.writerow({"name": "Alice", "extra": "oops"})
+
+    def test_extrasaction_ignore(self):
+        out = io.StringIO()
+        w = mycsv.DictWriter(out, fieldnames=["name"], extrasaction="ignore")
+        w.writerow({"name": "Alice", "extra": "ignored"})
+        assert out.getvalue() == "Alice\r\n"

@@ -1,0 +1,6 @@
+# Build dependencies (also declared in pyproject.toml [build-system])
+setuptools
+wheel
+
+# Development and testing
+pytest

@@ -97,7 +97,24 @@ class reader:
         # ... rest unchanged
 ```
 
-Apply the same pattern to `writer.__init__`.
+For `writer.__init__`, apply the same pattern but also include `lineterminator` — it controls line endings and is the most commonly overridden dialect setting:
+
+```python
+class writer:
+    def __init__(self, fileobj, delimiter=",", quotechar='"',
+                 lineterminator="\r\n", dialect=None):
+        if dialect is not None:
+            d = get_dialect(dialect) if isinstance(dialect, str) else dialect
+            delimiter      = getattr(d, "delimiter",      delimiter)
+            quotechar      = getattr(d, "quotechar",      quotechar)
+            lineterminator = getattr(d, "lineterminator", lineterminator)
+        self._file         = fileobj
+        self.delimiter     = delimiter
+        self.quotechar     = quotechar
+        self.lineterminator = lineterminator
+```
+
+> **Note:** `lineterminator` must be pulled from the dialect in `writer` but is not needed in `reader` (reader only parses, never writes line endings).
 
 ---
 
