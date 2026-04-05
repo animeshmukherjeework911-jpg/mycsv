@@ -26,46 +26,113 @@ tests/
   test_mycsv.py    44 tests, grouped by step so you can run them incrementally
 
 CHALLENGES_AHEAD.md    Extensions: SIMD scanning, mmap reader, async reader, and more
+PYTHON_C_API.md        Glossary of every C API function used in this project
 ```
 
 ---
 
-## How to follow the stages
-
-Each stage builds on the previous one. The tests are named to match:
+## Prerequisites
 
 ```bash
-pytest tests/ -k "TestStep1_" -v   # just stage 1 tests
-pytest tests/ -k "TestStep4_" -v   # just stage 4 tests
-pytest tests/ -v                    # all 44 tests
+python3 --version     # 3.10 or higher required
+gcc --version         # any modern GCC or Clang
+pip --version
 ```
 
-**Setup:**
+You also need the Python development headers (`Python.h`):
 
 ```bash
-python -m venv .venv
+# Debian / Ubuntu / WSL
+sudo apt install python3-dev
+
+# Fedora / RHEL
+sudo dnf install python3-devel
+
+# macOS (Xcode CLI tools includes them)
+xcode-select --install
+```
+
+Verify:
+```bash
+python3 -c "import sysconfig; print(sysconfig.get_path('include'))"
+# → /usr/include/python3.12  (or similar)
+```
+
+---
+
+## Quick start
+
+```bash
+git clone <this-repo>
+cd mycsv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+pytest tests/ -v
 ```
 
-The `pip install -e .` step compiles `_mycsv.c`. Re-run it after every C change.
+---
+
+## How to follow along stage by stage
+
+### Option A — Build it yourself (recommended)
+
+Follow `stages/STAGE1.md` through `stages/STAGE10.md`. Each guide tells you exactly
+what to write, gives you a smoke-test to verify it, and has a checklist before
+moving to the next stage.
+
+```bash
+# After pip install -e ., start here:
+pytest tests/ -k "TestStep1_" -v
+
+# Implement Stage 2, rebuild, then:
+pytest tests/ -k "TestStep1_ or TestStep2_" -v
+
+# Keep going — each guide ends with a checklist.
+```
+
+Re-compile after every C change:
+```bash
+pip install -e . --no-build-isolation
+```
+
+### Option B — Browse reference implementations
+
+The `step-by-step` branch contains a `src_step_by_step/` folder with a snapshot
+of `_mycsv.c` and `mycsv.py` at every stage:
+
+```bash
+git checkout step-by-step
+
+# Read the reference for any stage
+cat src_step_by_step/stage3/_mycsv.c
+
+# Diff two stages to see exactly what changed
+diff src_step_by_step/stage3/_mycsv.c src_step_by_step/stage4/_mycsv.c
+diff src_step_by_step/stage3/mycsv.py src_step_by_step/stage4/mycsv.py
+
+git checkout master   # return to the complete implementation
+```
+
+Try to implement a stage yourself first (Option A), then compare with the
+reference to see what you missed.
 
 ---
 
 ## Stage map
 
-| Stage | What you implement | C API introduced | Tests that pass |
+| Stage | What you implement | C API introduced | Tests |
 |---|---|---|---|
-| 1 | Module skeleton, `pyproject.toml`, `setup.py` | `PyModuleDef`, `PyMODINIT_FUNC` | `TestStep1_` (3 tests) |
+| 1 | Module skeleton, `pyproject.toml`, `setup.py`, Python stubs | `PyModuleDef`, `PyMODINIT_FUNC` | `TestStep1_` (3 tests) |
 | 2 | `parse_line` — split on delimiter, no quoting | `PyArg_ParseTuple`, `PyList_New`, `PyUnicode_FromStringAndSize`, `Py_DECREF` | `TestStep2_` |
-| 3 | `mycsv.reader` class in Python, wires `parse_line` | — | `TestStep3_` |
-| 4 | Quote state machine in C — `FIELD_START` → `IN_QUOTED` | `PyMem_Malloc/Realloc/Free`, `BUF_APPEND` macro | `TestStep4_` |
-| 5 | `parse_line` keyword args, `PyArg_ParseTupleAndKeywords` | `kwlist[]`, `METH_KEYWORDS` | existing tests |
-| 6 | `format_row` — write path with quoting decisions | `PySequence_Fast`, `PyUnicode_AsUTF8AndSize` | `TestStep6_` |
-| 7 | Multi-line field stitching in `reader.__next__` | — | `TestStep7_` |
+| 3 | Keyword args on `parse_line`; `mycsv.reader` class in Python | `PyArg_ParseTupleAndKeywords`, `METH_KEYWORDS` | `TestStep3_` |
+| 4 | Quote state machine in C — `FIELD_START` → `IN_QUOTED` | `PyMem_Malloc/Realloc/Free`, `BUF_APPEND` macro, `PyErr_SetString` | `TestStep4_` |
+| 5 | `format_row` basic — join fields with delimiter | `PySequence_Fast`, `PyUnicode_AsUTF8AndSize` | `TestStep6_` (partial) |
+| 6 | `format_row` full quoting modes + `mycsv.writer` | quoting constants, `PyModule_AddIntConstant` | `TestStep6_` |
+| 7 | Harden `reader` (skip empty lines, multi-line fields) + `writerows` | — | `TestStep7_` |
 | 8 | `DictReader`, `DictWriter` | — | `TestStep8_` |
-| 9 | `Dialect` class, `register_dialect`, `excel`/`excel-tab` | `PyModule_AddIntConstant` | `TestStep9_` |
-| 10 | `mycsv.Error` in C, validation, edge-case parity | `PyErr_NewException`, `PyErr_SetString` | All 44 |
+| 9 | `Dialect` class, `register_dialect`, `excel` / `excel-tab` | — | `TestStep9_` |
+| 10 | `mycsv.Error` in C, input validation, edge-case parity | `PyErr_NewException`, `PyModule_AddObject` | All 44 |
 
 ---
 
@@ -96,6 +163,8 @@ clean and is the same pattern used in CPython's `_csv.c`.
 `PyMem_Malloc` · `PyMem_Realloc` · `PyMem_Free` ·
 `PyModule_AddIntConstant` · `Py_DECREF` · `Py_INCREF`
 
+See `PYTHON_C_API.md` for a full glossary.
+
 ---
 
 ## What's next
@@ -107,7 +176,7 @@ clean and is the same pattern used in CPython's `_csv.c`.
 - **New features** — dialect sniffer, async reader, typed `DictReader` with schema
 - **Systems** — full C `reader` class with `PyTypeObject` / `tp_iternext` (how stdlib `csv.reader` is actually built)
 
-The recommended path if you want to stay in the C extension track:
+Recommended path if you want to stay in the C extension track:
 ```
 skipinitialspace → line-stitching in C → SIMD scanning → mmap reader → full C reader class
 ```
